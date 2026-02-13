@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="th">
+<head>
+  
+  <script>
+    // Theme init (light/dark) - persists in localStorage, defaults to system preference
+    (function(){
+      const saved = localStorage.getItem("theme");
+      const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const useDark = saved ? (saved === "dark") : prefersDark;
+      if(useDark) document.documentElement.classList.add("dark");
+    })();
+  </script>
+<meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LannaVeg Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+  <!-- Theme Toggle -->
+  <button id="themeToggle" type="button"
+    class="fixed top-4 right-4 z-[60] px-3 py-2 rounded-xl bg-white/90 dark:bg-slate-900/80
+           border border-slate-200/70 dark:border-slate-700/60 shadow-soft backdrop-blur
+           text-sm font-semibold text-slate-700 dark:text-slate-100">
+    🌞/🌙
+  </button>
+  <script>
+    (function(){
+      const btn = document.getElementById("themeToggle");
+      if(!btn) return;
+      btn.addEventListener("click", () => {
+        document.documentElement.classList.toggle("dark");
+        const isDark = document.documentElement.classList.contains("dark");
+        localStorage.setItem("theme", isDark ? "dark" : "light");
+      });
+    })();
+  </script>
+
+  <div class="max-w-xl mx-auto p-6">
+    <a href="/" class="text-slate-300 hover:text-white">← กลับหน้าเว็บ</a>
+    <h1 class="text-2xl font-semibold mt-4">Admin Panel</h1>
+
+    <div id="status" class="mt-4 text-sm text-slate-300"></div>
+
+    <div id="loginBox" class="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <h2 class="text-lg font-medium">เข้าสู่ระบบแอดมิน</h2>
+      <div class="mt-4 grid gap-3">
+        <input id="email" class="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Email" />
+        <input id="password" type="password" class="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Password" />
+        <input id="code" class="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Admin Code (ถ้ามี)" />
+        <button id="btnLogin" class="rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3 py-2 font-medium">Login</button>
+        <div id="loginErr" class="text-red-400 text-sm"></div>
+      </div>
+    </div>
+
+    <div id="panel" class="hidden mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-medium">ตั้งค่าระบบ</h2>
+        <button id="btnLogout" class="text-slate-300 hover:text-white text-sm">Logout</button>
+      </div>
+
+      <div class="mt-4 grid gap-3">
+        <label class="text-sm text-slate-300">Predict Mode</label>
+        <select id="predictMode" class="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2">
+          <option value="top1">Top-1 (แนะนำ)</option>
+          <option value="topk">Top-K (debug)</option>
+        </select>
+        <label class="text-sm text-slate-300">Top-K (ใช้เมื่อ Predict Mode = Top-K)</label>
+        <input id="topk" type="number" min="1" max="6" value="3" class="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2" />
+        <button id="btnSave" class="rounded-xl bg-sky-600 hover:bg-sky-500 px-3 py-2 font-medium">บันทึก</button>
+        <div id="saveMsg" class="text-sm text-slate-300"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const loginBox = document.getElementById('loginBox');
+  const panel = document.getElementById('panel');
+  const loginErr = document.getElementById('loginErr');
+  const saveMsg = document.getElementById('saveMsg');
+
+  async function api(path, opts={}){
+    const res = await fetch(path, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) },
+      ...opts
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.error || ('HTTP '+res.status));
+    return data;
+  }
+
+  async function refresh(){
+    try{
+      const s = await api('/api/admin/status');
+      if(s.is_admin){
+        loginBox.classList.add('hidden');
+        panel.classList.remove('hidden');
+        statusEl.textContent = `Logged in: ${s.email}`;
+        const cfg = await api('/api/admin/config');
+        document.getElementById('predictMode').value = cfg.predict_mode || 'top1';
+        document.getElementById('topk').value = cfg.topk || 3;
+      } else {
+        loginBox.classList.remove('hidden');
+        panel.classList.add('hidden');
+        statusEl.textContent = 'Not logged in.';
+      }
+    }catch(e){
+      statusEl.textContent = 'Error: '+e.message;
+    }
+  }
+
+  document.getElementById('btnLogin').addEventListener('click', async ()=>{
+    loginErr.textContent='';
+    try{
+      await api('/api/admin/login', {method:'POST', body: JSON.stringify({
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+        code: document.getElementById('code').value
+      })});
+      await refresh();
+    }catch(e){
+      loginErr.textContent = e.message;
+    }
+  });
+
+  document.getElementById('btnLogout').addEventListener('click', async ()=>{
+    await api('/api/admin/logout', {method:'POST', body:'{}'}).catch(()=>{});
+    await refresh();
+  });
+
+  document.getElementById('btnSave').addEventListener('click', async ()=>{
+    saveMsg.textContent='';
+    try{
+      const predict_mode = document.getElementById('predictMode').value;
+      const topk = parseInt(document.getElementById('topk').value||'3',10);
+      await api('/api/admin/config', {method:'POST', body: JSON.stringify({predict_mode, topk})});
+      saveMsg.textContent = 'บันทึกแล้ว';
+    }catch(e){
+      saveMsg.textContent = 'Error: '+e.message;
+    }
+  });
+
+  refresh();
+</script>
+</body>
+</html>
