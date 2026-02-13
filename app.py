@@ -28,7 +28,6 @@ def _sanitize_maps_key(raw: str) -> str:
     if not raw:
         return ""
     raw = ("" + raw).strip()
-    # allow only safe chars
     raw = "".join(ch for ch in raw if ch.isalnum() or ch in "-_")
     return raw
 
@@ -56,6 +55,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 # --- init db once ---
 _db_initialized = False
 
+
 @app.before_request
 def init_once():
     global _db_initialized
@@ -72,7 +72,6 @@ GOOGLE_CLIENT_ID = (os.environ.get("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.environ.get("GOOGLE_CLIENT_SECRET") or "").strip()
 
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
-# ✅ Render: ตั้ง PUBLIC_BASE_URL=https://lannaveg1.onrender.com
 GOOGLE_REDIRECT_URI = (os.environ.get("GOOGLE_REDIRECT_URI") or "").strip() or (
     f"{PUBLIC_BASE_URL}/auth/google/callback" if PUBLIC_BASE_URL else "http://127.0.0.1:5000/auth/google/callback"
 )
@@ -149,7 +148,6 @@ def auth_google_callback():
     if not code or not state or state != session.get("oauth_state"):
         return "OAuth state mismatch", 400
 
-    # exchange token
     token_resp = requests.post(
         GOOGLE_TOKEN_URI,
         data={
@@ -267,10 +265,16 @@ def predict():
         return jsonify({"error": "no_file"}), 400
 
     pred = predict_image(request.files["file"])  # returns dict
-    ck = pred.get("classKey")
+    ck = (pred.get("classKey") or pred.get("class_key") or "").strip()
+
+    # ✅ compatibility fields เผื่อหน้าเว็บอ่านชื่อเก่า
+    pred["class_key"] = pred.get("class_key") or (ck if ck else None)
+    pred["veg_key"] = pred.get("veg_key") or (ck if ck else None)
+    pred["predicted_class"] = pred.get("predicted_class") or pred.get("label")
 
     if ck:
         with db() as conn:
+            # ✅ แก้หลัก: ค้นหาได้หลายแบบ (veg_key / scientific_name / thai_name / en_name)
             row = conn.execute(
                 """
                 SELECT
@@ -282,23 +286,32 @@ def predict():
                   notes,
                   COALESCE(group_name,'ผักพื้นเมือง') AS group_name
                 FROM vegetables
-                WHERE class_key=?
+                WHERE class_key = ?
+                   OR lower(scientific_name) = lower(?)
+                   OR lower(thai_name) = lower(?)
+                   OR lower(en_name) = lower(?)
+                LIMIT 1
                 """,
-                (ck,),
+                (ck, ck, ck, ck),
             ).fetchone()
 
         if row:
             veg = dict(row)
+
             # ✅ ให้ชื่อ key ที่ UI ชอบใช้
             veg["benefits"] = veg.get("nutrition") or "-"
             veg["menus"] = veg.get("cooking") or "-"
             veg["notes"] = veg.get("notes") or "-"
             q = veg.get("thai_name") or veg.get("en_name") or ck
             veg["search_url"] = f"https://www.google.com/search?q={requests.utils.quote(str(q))}"
-            pred["veg"] = veg
 
+            pred["veg"] = veg
+            pred["veg_key"] = veg.get("veg_key")  # ให้ตรงกับ list /api/vegs
+
+            # ✅ label ให้เป็นชื่อไทยก่อน
             other = " • ".join([x for x in [veg.get("en_name"), veg.get("other_names")] if x])
             pred["label"] = (veg.get("thai_name") or ck) + (f" — {other}" if other else "")
+            pred["predicted_class"] = pred["label"]
 
     return jsonify(pred)
 
