@@ -5,36 +5,218 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>{{ site_name }}</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Arial;margin:24px}
-    #map{height:360px;border:1px solid #ddd;border-radius:12px;margin-top:16px}
-    .box{padding:12px;border:1px solid #ddd;border-radius:12px;margin-top:12px}
+    body{font-family:system-ui,Segoe UI,Arial;margin:24px;background:#0b1220;color:#e5e7eb}
+    h2{margin:0 0 12px 0}
+    .box{padding:14px;border:1px solid rgba(255,255,255,.12);border-radius:14px;margin-top:14px;background:rgba(255,255,255,.04)}
+    .row{display:flex;gap:14px;flex-wrap:wrap}
+    .col{flex:1;min-width:280px}
+    button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;background:#10b981;color:#052014;font-weight:700}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    input[type="file"]{color:#e5e7eb}
+    .muted{opacity:.75}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);color:#a7f3d0;font-weight:700}
+    .err{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.35);color:#fecaca}
+    .ok{background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.35);color:#a7f3d0}
+    #map{height:360px;border:1px solid rgba(255,255,255,.12);border-radius:14px;margin-top:12px}
+    .kv{margin-top:10px}
+    .kv b{display:inline-block;min-width:88px}
+    .card{margin-top:12px;padding:12px;border:1px dashed rgba(255,255,255,.16);border-radius:14px}
+    .title{font-size:18px;font-weight:800;margin:0 0 6px 0}
+    .small{font-size:13px}
+    a{color:#34d399}
+    pre{white-space:pre-wrap;word-break:break-word;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.10);padding:12px;border-radius:12px}
   </style>
 </head>
 <body>
   <h2>{{ site_name }}</h2>
+  <div class="muted">อัปโหลดรูป → กดทำนาย → ระบบจะแสดงชื่อผักและรายละเอียดจากฐานข้อมูล</div>
 
   <div class="box">
-    <input id="file" type="file" accept="image/*" />
-    <button id="btn">ทำนาย</button>
-    <pre id="out"></pre>
+    <div class="row">
+      <div class="col">
+        <div class="kv">
+          <b>เลือกรูป:</b>
+          <input id="file" type="file" accept="image/*" />
+        </div>
+        <div style="margin-top:10px">
+          <button id="btn">จำแนกชนิดผัก</button>
+          <span id="status" class="pill" style="margin-left:10px">พร้อมใช้งาน</span>
+        </div>
+        <div class="small muted" style="margin-top:10px">
+          รองรับ .jpg .jpeg .png
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="card" id="resultCard" style="display:none">
+          <div class="title" id="vegName">ผลลัพธ์</div>
+          <div class="small muted" id="vegSub"></div>
+
+          <div class="kv"><b>ความมั่นใจ:</b> <span id="conf">-</span></div>
+          <div class="kv"><b>สรรพคุณ:</b> <span id="benefits">-</span></div>
+          <div class="kv"><b>เมนู/การปรุง:</b> <span id="menus">-</span></div>
+          <div class="kv"><b>หมายเหตุ:</b> <span id="notes">-</span></div>
+          <div class="kv" id="searchWrap" style="display:none">
+            <b>ค้นหา:</b> <a id="searchLink" href="#" target="_blank" rel="noreferrer">เปิด Google</a>
+          </div>
+        </div>
+
+        <div class="card" id="emptyCard">
+          <div class="title">ผลลัพธ์: -</div>
+          <div class="muted small">ยังไม่ได้ทำนาย หรือยังไม่พบข้อมูลรายละเอียด</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <details>
+        <summary class="muted">ดู JSON ดิบ (debug)</summary>
+        <pre id="out">{}</pre>
+      </details>
+    </div>
   </div>
 
   <div class="box">
     <b>Google Map</b>
     <div id="map"></div>
-    <div id="mapStatus"></div>
+    <div id="mapStatus" class="pill" style="margin-top:10px">กำลังโหลด…</div>
   </div>
 
   <script>
-    const out = document.getElementById("out");
-    document.getElementById("btn").onclick = async () => {
-      const f = document.getElementById("file").files[0];
+    const $ = (id) => document.getElementById(id);
+
+    const btn = $("btn");
+    const out = $("out");
+    const status = $("status");
+
+    const resultCard = $("resultCard");
+    const emptyCard = $("emptyCard");
+
+    function setStatus(text, type="ok"){
+      status.textContent = text;
+      status.className = "pill " + (type === "err" ? "err" : "ok");
+    }
+
+    function showResultUI(){
+      emptyCard.style.display = "none";
+      resultCard.style.display = "block";
+    }
+
+    function resetResultUI(){
+      resultCard.style.display = "none";
+      emptyCard.style.display = "block";
+      $("vegName").textContent = "ผลลัพธ์";
+      $("vegSub").textContent = "";
+      $("conf").textContent = "-";
+      $("benefits").textContent = "-";
+      $("menus").textContent = "-";
+      $("notes").textContent = "-";
+      $("searchWrap").style.display = "none";
+      $("searchLink").href = "#";
+    }
+
+    async function fetchVegDetailByKey(key){
+      if(!key) return null;
+      try{
+        const r = await fetch(`/api/vegs/${encodeURIComponent(key)}`);
+        if(!r.ok) return null;
+        return await r.json();
+      }catch(e){
+        return null;
+      }
+    }
+
+    function renderPrediction(data){
+      // data from /predict
+      const label = data?.label || data?.predicted_class || "-";
+      const conf = typeof data?.confidence === "number" ? (data.confidence * 100).toFixed(2) + "%" : "-";
+
+      // veg detail may be attached
+      const veg = data?.veg || null;
+
+      showResultUI();
+      $("vegName").textContent = label;
+      $("conf").textContent = conf;
+
+      if(veg){
+        const th = veg.thai_name || label;
+        const sci = veg.scientific_name || "";
+        const other = [veg.en_name, veg.other_names].filter(Boolean).join(" • ");
+
+        $("vegName").textContent = th;
+        $("vegSub").textContent = [sci, other].filter(Boolean).join(" | ");
+
+        $("benefits").textContent = veg.benefits || veg.nutrition || "-";
+        $("menus").textContent = veg.menus || veg.cooking || "-";
+        $("notes").textContent = veg.notes || "-";
+
+        if(veg.search_url){
+          $("searchWrap").style.display = "block";
+          $("searchLink").href = veg.search_url;
+        } else {
+          $("searchWrap").style.display = "none";
+        }
+      } else {
+        // no veg attached
+        $("benefits").textContent = "-";
+        $("menus").textContent = "-";
+        $("notes").textContent = "-";
+        $("searchWrap").style.display = "none";
+      }
+    }
+
+    btn.onclick = async () => {
+      const f = $("file").files[0];
       if(!f){ alert("เลือกรูปก่อน"); return; }
-      const fd = new FormData();
-      fd.append("file", f);
-      const res = await fetch("/predict", { method:"POST", body: fd });
-      const data = await res.json();
-      out.textContent = JSON.stringify(data, null, 2);
+
+      btn.disabled = true;
+      setStatus("กำลังทำนาย…", "ok");
+
+      try{
+        const fd = new FormData();
+        fd.append("file", f);
+
+        const res = await fetch("/predict", { method:"POST", body: fd });
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+
+        // แสดงผลจาก /predict ก่อน
+        renderPrediction(data);
+
+        // ถ้า backend ยังไม่ได้แนบ veg มา → ลองดึง detail อีกชั้น
+        if(!data?.veg){
+          const key = data?.veg_key || data?.class_key || data?.classKey || "";
+          const detail = await fetchVegDetailByKey(key);
+          if(detail && !detail.error){
+            // map เป็นรูปแบบเดียวกับที่ UI ต้องการ
+            const veg = {
+              ...detail,
+              benefits: detail.nutrition || "-",
+              menus: detail.cooking || "-",
+              notes: detail.notes || "-",
+              search_url: detail.thai_name ? `https://www.google.com/search?q=${encodeURIComponent(detail.thai_name)}` : null
+            };
+            // re-render with veg detail
+            renderPrediction({ ...data, veg, label: detail.thai_name || data.label });
+          }
+        }
+
+        // ถ้าสุดท้ายยังไม่เจอ detail
+        const stillEmpty = ($("benefits").textContent === "-" && $("menus").textContent === "-");
+        if(stillEmpty){
+          setStatus("ทำนายได้ แต่ไม่พบรายละเอียดในฐานข้อมูล", "err");
+        } else {
+          setStatus("ทำนายสำเร็จ ✅", "ok");
+        }
+
+      }catch(err){
+        console.error(err);
+        setStatus("ทำนายไม่สำเร็จ (ดู JSON/Console)", "err");
+        out.textContent = String(err);
+        resetResultUI();
+      }finally{
+        btn.disabled = false;
+      }
     };
 
     // ---- Google Maps ----
@@ -45,17 +227,27 @@
         zoom: 10
       });
       document.getElementById("mapStatus").textContent = "Map loaded ✅";
+      document.getElementById("mapStatus").className = "pill ok";
     }
     window.initMap = initMap;
+
+    // Map error fallback
+    window.gm_authFailure = function(){
+      document.getElementById("mapStatus").textContent = "Google Maps key ไม่ถูกต้อง หรือโดเมนไม่ได้รับอนุญาต";
+      document.getElementById("mapStatus").className = "pill err";
+    }
+
+    resetResultUI();
   </script>
 
   {% if gmaps_key %}
-  <script src="https://maps.googleapis.com/maps/api/js?key={{ gmaps_key }}&callback=initMap" async defer></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ gmaps_key }}&callback=initMap" async defer></script>
   {% else %}
-  <script>
-    document.getElementById("mapStatus").textContent =
-      "MAPS_API_KEY ยังไม่ถูกตั้งใน Render หรือคีย์ไม่ถูกต้อง";
-  </script>
+    <script>
+      document.getElementById("mapStatus").textContent =
+        "ยังไม่ได้ตั้ง MAPS_API_KEY ใน Render หรือคีย์ไม่ถูกต้อง";
+      document.getElementById("mapStatus").className = "pill err";
+    </script>
   {% endif %}
 </body>
 </html>
