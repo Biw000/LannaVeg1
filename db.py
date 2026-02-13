@@ -1,124 +1,114 @@
-import os, sqlite3, time
-from contextlib import contextmanager
+from __future__ import annotations
+import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "data.sqlite3"))
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "data.sqlite3"
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ✅ แก้/เติมข้อมูลตรงนี้ให้ครบ (นี่คือต้นทางจริง)
+VEG_SEED = [
+    {
+        "class_key": "Tupistra albiflora",
+        "thai_name": "นางแลว",
+        "en_name": "Tupistra",
+        "other_names": "",
+        "scientific_name": "Tupistra albiflora",
+        "group_name": "ผักพื้นบ้าน",
+        "nutrition": "สรรพคุณ: ช่วย... (ใส่ของจริงได้เลย)",
+        "cooking": "ลวก/ต้ม/แกง/ผัด",
+        "notes": "หมายเหตุ: ...",
+    },
+    {
+        "class_key": "Azadirachta indica",
+        "thai_name": "สะเดา",
+        "en_name": "Neem",
+        "other_names": "",
+        "scientific_name": "Azadirachta indica",
+        "group_name": "ผักพื้นเมือง",
+        "nutrition": "สรรพคุณ: ...",
+        "cooking": "ลวกจิ้มน้ำปลาหวาน",
+        "notes": "",
+    },
+    # ✅ เติมเพิ่มให้ครบ 6 คลาสของคุณได้เลย
+]
 
-def _table_cols(conn, table: str) -> set[str]:
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        return {r[1] for r in rows}
-    except Exception:
-        return set()
+SCHEMA_VERSION = 1
 
-def _schema_ok(conn) -> bool:
-    need = {
-        "users": {"id","provider","provider_sub","display_name","email","avatar_url","created_at"},
-        "vegetables": {"class_key","thai_name","en_name","other_names","scientific_name","nutrition","cooking"},
-        "markers": {"id","veg_key","user_id","place_name","province","lat","lon","created_at","updated_at"},
-        "reviews": {"id","marker_id","user_id","rating","comment","created_at","updated_at"},
-        "settings": {"key","value"},
-    }
-    for t, cols in need.items():
-        have = _table_cols(conn, t)
-        if not cols.issubset(have):
-            return False
-    return True
-
-def init_db(reset_if_mismatch: bool = True):
-    """Create DB schema. Auto-backup + recreate if an older/incorrect DB exists."""
-    db_file = Path(DB_PATH)
-    schema_path = Path(__file__).with_name("schema.sql")
-    db_file.parent.mkdir(parents=True, exist_ok=True)
-
-    if db_file.exists() and reset_if_mismatch:
-        ok = False
-        try:
-            conn = sqlite3.connect(str(db_file))
-            ok = _schema_ok(conn)
-            conn.close()
-        except Exception:
-            ok = False
-        if not ok:
-            ts = int(time.time())
-            backup = db_file.with_name(f"{db_file.stem}_backup_{ts}{db_file.suffix}")
-            try:
-                db_file.replace(backup)
-            except Exception:
-                try:
-                    db_file.unlink()
-                except Exception:
-                    pass
-
-    conn = sqlite3.connect(str(db_file))
-    conn.executescript(schema_path.read_text(encoding="utf-8"))
-    # --- lightweight migrations (keep existing data) ---
-    # Add group_name column if missing (required for "ระบบกลุ่มผัก")
-    try:
-        cols = _table_cols(conn, "vegetables")
-        if "group_name" not in cols:
-            conn.execute("ALTER TABLE vegetables ADD COLUMN group_name TEXT")
-    except Exception:
-        pass
-    conn.commit()
-    conn.close()
-
-def get_setting(key: str, default: str | None = None) -> str | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else default
-
-
-def set_setting(key: str, value: str):
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-        conn.commit()
-
-def seed_if_empty():
-    with get_conn() as conn:
-        row = conn.execute("SELECT COUNT(*) AS n FROM vegetables").fetchone()
-        if row["n"] > 0:
-            return
-
-        # 6 classes (EfficientNetB2) – show Thai first, then other names in UI
-        vegs = [
-            ("makwaen","มะแขว่น","Makwaen","มะแขว่น/พริกขี้หนูป่า (บางพื้นที่)","Zanthoxylum limonella",
-             "น้ำมันหอมระเหยตามธรรมชาติ • ใยอาหาร (ขึ้นกับส่วนที่กิน)",
-             "คั่ว/ตำพริกแกง • ใส่น้ำพริก/แกงอ่อม • โรยเพิ่มกลิ่นหอมซ่า"),
-            ("neem","สะเดา","Neem","สะเดาไทย/สะเดาแดง (พบเรียกต่างกัน)","Azadirachta indica",
-             "ใยอาหาร • สารต้านอนุมูลอิสระจากพืช",
-             "ลวกเพื่อลดความขม • กินคู่ปลาย่าง/น้ำปลาหวาน • ใส่แกง"),
-            ("paracress","ผักคราด","Para Cress","ผักคราดหัวแหวน/Spilanthes (ชื่อเรียกเดิม)","Acmella oleracea",
-             "ใยอาหาร • วิตามิน A/C (ขึ้นกับความสด)",
-             "กินสดแนม • ใส่ยำ/ส้มตำ • ผัดไฟแรงให้กรอบ"),
-            ("rattailed_radish","ผักขี้หูด","French radis","หัวไชเท้าฝรั่ง/เรดิช","Raphanus sativus",
-             "วิตามิน C • ใยอาหาร • น้ำสูง",
-             "กินสด/สลัด • ดองเปรี้ยว • ผัด/ลวกจิ้มน้ำพริก"),
-            ("tupistra","นางแลว","Tupistra","นางแลว (เรียกท้องถิ่น)","Tupistra albiflora",
-             "ใยอาหาร • แร่ธาตุจากพืชใบเขียว (ขึ้นกับพื้นที่)",
-             "ลวก/นึ่งจิ้มน้ำพริก • แกงแค/แกงผักรวม • ผัดกระเทียม"),
-            ("salae","สะแล","Salae","สะแล","Bauhinia sp.",
-             "ใยอาหาร • วิตามินจากยอดอ่อน",
-             "แกงแค • ลวกจิ้มน้ำพริก • ผัดน้ำมันหอย"),
-        ]
-
-        conn.executemany(
-            "INSERT INTO vegetables (class_key,thai_name,en_name,other_names,scientific_name,nutrition,cooking) VALUES (?,?,?,?,?,?,?)",
-            vegs,
-        )
-        conn.commit()
 @contextmanager
 def db():
-    conn = get_conn()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
         yield conn
     finally:
         conn.close()
+
+def init_db(reset_if_mismatch: bool = True):
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with db() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS _meta(
+            k TEXT PRIMARY KEY,
+            v TEXT
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL,
+            provider_sub TEXT NOT NULL,
+            email TEXT,
+            display_name TEXT,
+            avatar_url TEXT,
+            UNIQUE(provider, provider_sub)
+        )""")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS vegetables(
+            class_key TEXT PRIMARY KEY,
+            thai_name TEXT,
+            en_name TEXT,
+            other_names TEXT,
+            scientific_name TEXT,
+            group_name TEXT,
+            nutrition TEXT,
+            cooking TEXT,
+            notes TEXT
+        )""")
+
+        # schema version
+        row = conn.execute("SELECT v FROM _meta WHERE k='schema_version'").fetchone()
+        if not row:
+            conn.execute("INSERT INTO _meta(k,v) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
+            conn.commit()
+        else:
+            if reset_if_mismatch and row["v"] != str(SCHEMA_VERSION):
+                # reset vegetables only (keep users)
+                conn.execute("DELETE FROM vegetables")
+                conn.execute("UPDATE _meta SET v=? WHERE k='schema_version'", (str(SCHEMA_VERSION),))
+                conn.commit()
+
+def seed_if_empty():
+    with db() as conn:
+        row = conn.execute("SELECT COUNT(1) AS n FROM vegetables").fetchone()
+        if row and int(row["n"]) > 0:
+            return
+
+        for v in VEG_SEED:
+            conn.execute("""
+                INSERT INTO vegetables(
+                    class_key, thai_name, en_name, other_names, scientific_name,
+                    group_name, nutrition, cooking, notes
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+            """, (
+                v.get("class_key",""),
+                v.get("thai_name",""),
+                v.get("en_name",""),
+                v.get("other_names",""),
+                v.get("scientific_name",""),
+                v.get("group_name",""),
+                v.get("nutrition",""),
+                v.get("cooking",""),
+                v.get("notes",""),
+            ))
+        conn.commit()
